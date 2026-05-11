@@ -43,7 +43,9 @@ apiRouter.get('/trending', asyncHandler(async (req, res) => {
 }));
 
 apiRouter.get('/watch/:id', asyncHandler(async (req, res) => {
-  const data = await fetchVideoPage(String(req.params.id || '').trim(), { quality: String(req.query.quality || '').trim() });
+  const data = await fetchVideoPage(String(req.params.id || '').trim(), {
+    quality: String(req.query.quality || '').trim(),
+  });
   res.json(data);
 }));
 
@@ -56,11 +58,15 @@ apiRouter.get('/watch/:id/comments', asyncHandler(async (req, res) => {
 }));
 
 apiRouter.get('/watch/:id/stream', asyncHandler(async (req, res) => {
-  await streamVideo(req, res, String(req.params.id || '').trim());
+  await streamVideo(req, res, String(req.params.id || '').trim(), {
+    quality: String(req.query.quality || '').trim(),
+  });
 }));
 
 apiRouter.get('/watch/:id/download', asyncHandler(async (req, res) => {
-  await downloadVideo(req, res, String(req.params.id || '').trim());
+  await downloadVideo(req, res, String(req.params.id || '').trim(), {
+    quality: String(req.query.quality || '').trim(),
+  });
 }));
 
 apiRouter.get('/thumbnail', asyncHandler(async (req, res) => {

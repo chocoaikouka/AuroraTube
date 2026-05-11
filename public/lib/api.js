@@ -82,7 +82,7 @@ export const api = {
     const url = `/api/trending${toQuery({ type, region })}`;
     return fetchJson(url, { cacheKey: url, signal, ttlMs: 2 * 60 * 1000 });
   },
-  watch: (id, { quality = '' } = {}, signal) => {
+  watch: (id, { signal, quality = '' } = {}) => {
     const url = `/api/watch/${encodeURIComponent(id)}${toQuery({ quality })}`;
     return fetchJson(url, { cacheKey: url, signal });
   },

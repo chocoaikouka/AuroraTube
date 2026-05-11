@@ -5,6 +5,10 @@ import { isNonEmptyString, isPlainObject } from '../lib/strings.js';
 const badInstances = new Map();
 let rrIndex = 0;
 const ACTIVE_BAD_TTL_MS = 5 * 60 * 1000;
+const REQUEST_RETRIES = 2;
+const RETRY_BACKOFF_MS = 160;
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const availableInstances = () => {
   const now = Date.now();
@@ -39,10 +43,10 @@ const buildQuery = (query = {}) => {
   return queryString ? `?${queryString}` : '';
 };
 
-const shouldFailover = (error) => {
+const shouldRetry = (error) => {
   const status = Number(error?.statusCode || error?.status || 0);
-  if (status >= 500 || status === 429) return true;
-  return error?.name === 'AbortError'
+  return status >= 500 || status === 429
+    || error?.name === 'AbortError'
     || error?.code === 'ECONNRESET'
     || error?.code === 'ENOTFOUND'
     || error?.code === 'EAI_AGAIN'
@@ -50,7 +54,7 @@ const shouldFailover = (error) => {
     || error?.code === 'ETIMEDOUT';
 };
 
-export const fetchJsonFromInstance = async (instance, path, query = {}, options = {}) => {
+const fetchJsonOnce = async (instance, path, query = {}, options = {}) => {
   const timeoutMs = Number(options.timeoutMs || settings.requestTimeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -63,7 +67,7 @@ export const fetchJsonFromInstance = async (instance, path, query = {}, options 
       },
     });
 
-    const contentType = response.headers.get('content-type') || '';
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
     const payload = contentType.includes('application/json')
       ? await response.json().catch(() => null)
       : await response.text().catch(() => '');
@@ -87,6 +91,29 @@ export const fetchJsonFromInstance = async (instance, path, query = {}, options 
   }
 };
 
+export const fetchJsonFromInstance = async (instance, path, query = {}, options = {}) => {
+  const retries = Math.max(0, Number(options.retries ?? REQUEST_RETRIES));
+  const errors = [];
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fetchJsonOnce(instance, path, query, options);
+    } catch (error) {
+      errors.push(error?.message || String(error));
+      if (attempt < retries && shouldRetry(error)) {
+        await delay(RETRY_BACKOFF_MS * (attempt + 1));
+        continue;
+      }
+      if (shouldRetry(error)) markBad(instance);
+      const wrapped = error instanceof Error ? error : new Error(String(error));
+      wrapped.details = errors;
+      throw wrapped;
+    }
+  }
+
+  throw unavailable(`request failed for ${path}`, errors);
+};
+
 const tryAcrossInstances = async (path, query = {}, options = {}) => {
   const errors = [];
   const statusCodes = [];
@@ -99,7 +126,7 @@ const tryAcrossInstances = async (path, query = {}, options = {}) => {
       const status = Number(error?.statusCode || error?.status || 0);
       statusCodes.push(status);
       errors.push(`${instance}: ${error?.message || String(error)}`);
-      if (shouldFailover(error)) markBad(instance);
+      if (shouldRetry(error)) markBad(instance);
     }
   }
 

@@ -1,10 +1,11 @@
-export const escapeHtml = (value) =>
-  String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+export const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+export const escapeAttr = (value) => escapeHtml(value).replace(/`/g, '&#96;');
 
 export const textBlock = (value) => escapeHtml(String(value ?? '')).replace(/\n/g, '<br />');
 
@@ -33,6 +34,7 @@ export const timeAgo = (epochSeconds) => {
   const ts = Number(epochSeconds || 0) * 1000;
   if (!ts) return '';
   const diff = Date.now() - ts;
+  if (diff <= 0) return 'たった今';
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return 'たった今';
   if (minutes < 60) return `${minutes} 分前`;

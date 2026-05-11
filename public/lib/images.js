@@ -1,12 +1,9 @@
-const toHttpUrl = (value) => {
-  const text = String(value || '').trim();
-  if (!text) return '';
-  if (text.startsWith('//')) return `${window.location.protocol}${text}`;
+const isAbsoluteHttpUrl = (value) => {
   try {
-    const url = new URL(text, window.location.origin);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : '';
+    const parsed = new URL(String(value || ''), window.location.href);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
-    return '';
+    return false;
   }
 };
 
@@ -14,9 +11,12 @@ export const thumbnailUrl = (url) => {
   const value = String(url || '').trim();
   if (!value) return '';
   if (value.startsWith('/api/thumbnail?url=')) return value;
-  const absolute = toHttpUrl(value);
-  if (!absolute) return '';
-  return `/api/thumbnail?url=${encodeURIComponent(absolute)}`;
+  if (!isAbsoluteHttpUrl(value) && !value.startsWith('//')) return '';
+  const normalized = value.startsWith('//') ? `${window.location.protocol}${value}` : value;
+  return `/api/thumbnail?url=${encodeURIComponent(normalized)}`;
 };
 
-export const resolveImageUrl = (url) => thumbnailUrl(url);
+export const posterStyle = (url) => {
+  const src = thumbnailUrl(url);
+  return src ? `background-image:url('${src.replace(/'/g, '%27')}')` : '';
+};

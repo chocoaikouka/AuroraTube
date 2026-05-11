@@ -1,46 +1,9 @@
-import { escapeHtml, formatCompactNumber, formatDuration, formatNumber, textBlock } from './lib/format.js';
+import { escapeAttr, escapeHtml, formatCompactNumber, formatDuration, formatNumber, textBlock } from './lib/format.js';
 import { avatar, channelCard, commentCard, isShortVideo, playlistCard, videoCard } from './lib/cards.js';
 import { thumbnailUrl } from './lib/images.js';
-import { playerMarkup } from './lib/player.js';
-import { buildHomeUrl, buildResultsUrl, buildShortsUrl, buildChannelUrl } from './lib/routes.js';
-
-const navItems = [
-  { label: 'ホーム', href: buildHomeUrl(), key: 'home' },
-  { label: 'ショート', href: buildShortsUrl(''), key: 'shorts' },
-];
-
-const pageShell = (body, title, query = '', active = 'home') => ({
-  html: `
-    <header class="topbar">
-      <div class="topbar-left">
-        <button class="menu-button" type="button" aria-label="メニュー">☰</button>
-        <a class="brand" href="${buildHomeUrl()}" aria-label="AuroraTube ホーム">
-          <span class="brand-mark">▶</span>
-          <span class="brand-name">AuroraTube</span>
-        </a>
-      </div>
-
-      <form id="search-form" class="search-form" autocomplete="off">
-        <input id="search-input" name="q" type="search" value="${escapeHtml(query)}" placeholder="検索" aria-label="検索" />
-        <button type="submit" class="search-submit" aria-label="検索">検索</button>
-        <div class="search-suggestions" id="search-suggestions" hidden></div>
-      </form>
-
-      <div class="topbar-actions" aria-label="アクション">
-        <a class="icon-chip ${active === 'shorts' ? 'active' : ''}" href="${buildShortsUrl('')}">ショート</a>
-        <a class="icon-chip ${active === 'home' ? 'active' : ''}" href="${buildHomeUrl()}">ホーム</a>
-      </div>
-    </header>
-
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="ナビゲーション">
-        ${navItems.map((item) => `<a class="sidebar-link${active === item.key ? ' active' : ''}" href="${item.href}">${escapeHtml(item.label)}</a>`).join('')}
-      </aside>
-      <main class="content">${body}</main>
-    </div>
-  `,
-  title,
-});
+import { appShell } from './lib/shell.js';
+import { channelUrl, currentUrl, searchUrl } from './lib/routes.js';
+import { playerMarkup } from './player.js';
 
 const splitVideos = (items = []) => {
   const shorts = [];
@@ -53,259 +16,317 @@ const splitVideos = (items = []) => {
   return { shorts, videos };
 };
 
-const sectionBlock = (title, items, variant = 'grid') => {
-  if (!items.length) return '';
+const section = (title, body, action = '') => `
+  <section class="section-block">
+    <div class="section-head">
+      <h2>${escapeHtml(title)}</h2>
+      ${action}
+    </div>
+    ${body}
+  </section>
+`;
+
+const chip = (label, href, active = false) => `<a class="topic-chip${active ? ' active' : ''}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+
+const filterRow = (query, filters = {}) => {
+  const sortOptions = [
+    ['関連度', 'relevance'],
+    ['アップロード日', 'upload_date'],
+    ['視聴回数', 'view_count'],
+    ['評価順', 'rating'],
+  ];
+  const typeOptions = [
+    ['すべて', 'all'],
+    ['動画', 'video'],
+    ['短尺', 'short'],
+    ['チャンネル', 'channel'],
+    ['再生リスト', 'playlist'],
+  ];
+
+  const makeUrl = (next) => searchUrl(query, {
+    ...filters,
+    ...next,
+  });
+
+  return `
+    <div class="chip-row chip-row--filters">
+      <div class="chip-group">
+        ${sortOptions.map(([label, value]) => chip(label, makeUrl({ sort: value }), String(filters.sort || 'relevance') === value)).join('')}
+      </div>
+      <div class="chip-group">
+        ${typeOptions.map(([label, value]) => chip(label, makeUrl({ type: value }), String(filters.type || 'all') === value)).join('')}
+      </div>
+    </div>
+  `;
+};
+
+const heroPanel = (item) => {
+  if (!item) return '';
+  return `
+    <div class="hero-featured-card">
+      ${videoCard(item, 'featured')}
+    </div>
+  `;
+};
+
+const heroHeader = ({ eyebrow, title, description, meta = '' }) => `
+  <section class="page-hero">
+    <div class="page-hero-copy">
+      <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+      <h1>${escapeHtml(title)}</h1>
+      ${description ? `<p class="page-hero-description">${escapeHtml(description)}</p>` : ''}
+      <div class="hero-meta-row">${meta}</div>
+    </div>
+  </section>
+`;
+
+const renderGrid = (items = [], variant = 'grid') => `<div class="${variant === 'short' ? 'short-grid' : variant === 'row' ? 'video-list' : 'video-grid'}">${items.map((item) => videoCard(item, variant)).join('')}</div>`;
+
+const renderChannels = (items = []) => items.length ? `<div class="channel-grid">${items.map((item) => channelCard(item)).join('')}</div>` : '<div class="empty-state">チャンネルが見つかりません</div>';
+
+const renderPlaylists = (items = []) => items.length ? `<div class="playlist-grid">${items.map((item) => playlistCard(item)).join('')}</div>` : '';
+
+const renderLoadMore = ({ continuation, id, sortBy, label, type = 'channel' }) => continuation ? `<button class="ghost-btn load-more" type="button" data-load-${type}="${escapeAttr(continuation)}" data-${type}-id="${escapeAttr(id)}" data-sort-by="${escapeAttr(sortBy)}">${escapeHtml(label)}</button>` : '';
+
+export const homePage = (trending = [], region = 'US') => {
+  const { shorts, videos } = splitVideos(trending);
+  const first = trending[0] || videos[0] || shorts[0] || null;
+  const body = `
+    ${heroHeader({
+      eyebrow: 'ホーム',
+      title: '美しく、軽く、迷わない動画体験。',
+      description: 'YouTube の導線を踏襲しつつ、視認性と回遊性を高めたモダンなフロントです。',
+      meta: `<span class="pill">地域 ${escapeHtml(region)}</span><span class="pill">${formatCompactNumber(trending.length)} 件の候補</span>`,
+    })}
+
+    <section class="chip-row">
+      ${['音楽', 'ゲーム', 'ライブ', 'ニュース', 'ポッドキャスト', '料理', '旅行'].map((label) => chip(label, searchUrl(label))).join('')}
+    </section>
+
+    ${heroPanel(first)}
+
+    ${shorts.length ? section('ショート', renderGrid(shorts.slice(0, 12), 'short')) : ''}
+    ${videos.length ? section('注目の動画', renderGrid(videos.slice(0, 18), 'grid')) : ''}
+    ${!shorts.length && !videos.length ? '<div class="empty-state large">表示できるコンテンツがありません</div>' : ''}
+  `;
+
+  return { html: appShell({ title: 'AuroraTube', body, active: 'home' }), title: 'AuroraTube' };
+};
+
+export const resultsPage = (query, filters = {}, items = []) => {
+  const { shorts, videos } = splitVideos(items);
+  const channels = items.filter((item) => item?.type === 'channel');
+  const playlists = items.filter((item) => item?.type === 'playlist');
+  const body = `
+    ${heroHeader({
+      eyebrow: '検索',
+      title: query || '検索結果',
+      description: 'フィルタを使って、動画・ショート・チャンネルを切り替えられます。',
+      meta: `<span class="pill">${formatNumber(items.length)} 件</span><span class="pill">${escapeHtml(filters.sort || 'relevance')}</span><span class="pill">${escapeHtml(filters.type || 'all')}</span>`,
+    })}
+
+    ${filterRow(query, filters)}
+
+    ${shorts.length ? section('ショート', renderGrid(shorts, 'short')) : ''}
+    ${videos.length ? section('動画', renderGrid(videos, 'grid')) : ''}
+    ${channels.length ? section('チャンネル', renderChannels(channels)) : ''}
+    ${playlists.length ? section('再生リスト', renderPlaylists(playlists)) : ''}
+    ${!items.length ? '<div class="empty-state large">結果がありません</div>' : ''}
+  `;
+
+  return { html: appShell({ title: `${query || '検索'} - AuroraTube`, body, query, active: '' }), title: `${query || '検索'} - AuroraTube` };
+};
+
+const watchActions = (videoId, sourceUrl = '', pageUrl = '') => `
+  <div class="watch-actions">
+    <button class="watch-action" type="button" data-copy-link data-url="${escapeAttr(pageUrl)}">
+      <span class="watch-action-icon">⧉</span>
+      <span>コピー</span>
+    </button>
+    <button class="watch-action" type="button" data-share-link data-url="${escapeAttr(pageUrl)}">
+      <span class="watch-action-icon">↗</span>
+      <span>共有</span>
+    </button>
+    <a class="watch-action" href="${escapeAttr(sourceUrl || `/api/watch/${encodeURIComponent(videoId)}/download`)}">
+      <span class="watch-action-icon">↓</span>
+      <span>DL</span>
+    </a>
+  </div>
+`;
+
+const watchHeader = (video = {}, playback = {}, pageUrl = '') => `
+  <section class="watch-head">
+    <div class="watch-title-copy">
+      <p class="eyebrow">${video.lengthSeconds && Number(video.lengthSeconds) <= 60 ? 'ショート' : '再生中'}</p>
+      <h1 class="watch-title">${escapeHtml(video.title || '')}</h1>
+      <div class="watch-meta-row">
+        <span>${video.viewCount ? `${formatCompactNumber(video.viewCount)} 回視聴` : '0 回視聴'}</span>
+        ${video.publishedText ? `<span>${escapeHtml(video.publishedText)}</span>` : ''}
+        ${video.lengthSeconds ? `<span>${formatDuration(video.lengthSeconds)}</span>` : ''}
+      </div>
+    </div>
+    ${watchActions(video.videoId || '', playback?.downloadUrl || '', pageUrl)}
+  </section>
+`;
+
+const channelInfo = (video = {}) => video.authorId ? `
+  <a class="channel-strip" href="${channelUrl(video.authorId)}">
+    <span class="channel-strip-avatar">${avatar(video.authorThumbnails || [])}</span>
+    <span class="channel-strip-copy">
+      <strong class="channel-name">${escapeHtml(video.author || '')}</strong>
+      <span class="channel-submeta">${escapeHtml(video.authorId || '')}${video.sourceLabel ? ` ・ ${escapeHtml(video.sourceLabel)}` : ''}</span>
+    </span>
+    <span class="channel-strip-arrow">${'›'}</span>
+  </a>
+` : '';
+
+const descriptionBlock = (description = '') => description ? `<section class="description-card"><div class="description">${textBlock(description)}</div></section>` : '';
+
+const commentsSection = (payload = {}, videoId = '') => {
+  const comments = Array.isArray(payload.comments) ? payload.comments : [];
   return `
     <section class="section-block">
-      <div class="section-head"><h2>${escapeHtml(title)}</h2></div>
-      <section class="${variant}">${items.map((item) => videoCard(item, variant === 'short-grid' ? 'short' : 'grid')).join('')}</section>
+      <div class="section-head">
+        <h2>コメント</h2>
+        <span class="pill">${formatNumber(payload.video?.commentsCount || comments.length)} 件</span>
+      </div>
+      <div class="comments" data-comments>
+        ${comments.map((comment) => commentCard(comment)).join('') || '<div class="empty-state">コメントがありません</div>'}
+      </div>
+      ${payload.commentsContinuation ? `<button class="ghost-btn load-more" type="button" data-load-comments="${escapeAttr(payload.commentsContinuation)}" data-video-id="${escapeAttr(videoId)}">さらに表示</button>` : ''}
     </section>
   `;
-};
-
-const channelSections = (items = []) => {
-  const channels = items.filter((item) => item.type === 'channel');
-  if (!channels.length) return '';
-  return `<section class="section-block"><div class="section-head"><h2>チャンネル</h2></div><div class="card-grid">${channels.map((item) => channelCard(item)).join('')}</div></section>`;
-};
-
-const playlistSections = (items = []) => {
-  const playlists = items.filter((item) => item.type === 'playlist');
-  if (!playlists.length) return '';
-  return `<section class="section-block"><div class="section-head"><h2>再生リスト</h2></div><div class="card-grid">${playlists.map((item) => playlistCard({ ...item, videos: item.videos || [] })).join('')}</div></section>`;
-};
-
-const playbackNotice = (playback = {}) => {
-  const sourceUrl = String(playback.finalUrl || playback.sourceUrl || playback.playUrl || '');
-  if (!sourceUrl) return '';
-  const proxy = Boolean(playback.proxy);
-  return `
-    <section class="playback-note ${proxy ? 'is-proxied' : 'is-direct'}">
-      <div>
-        <strong>${proxy ? 'プロキシ再生' : '直接再生'}</strong>
-        <p>${escapeHtml(proxy ? '再生はローカル経由です。' : playback.warning || '直接参照のまま再生します。')}</p>
-      </div>
-      <code title="${escapeHtml(sourceUrl)}">${escapeHtml(sourceUrl)}</code>
-    </section>
-  `;
-};
-
-const filterChips = (filters = {}) => {
-  const chips = [
-    ['全て', buildResultsUrl(filters.query || ''), !filters.type || filters.type === 'all'],
-    ['動画', buildResultsUrl(filters.query || '', { type: 'video' }), filters.type === 'video'],
-    ['短尺', buildResultsUrl(filters.query || '', { type: 'short' }), filters.type === 'short'],
-    ['チャンネル', buildResultsUrl(filters.query || '', { type: 'channel' }), filters.type === 'channel'],
-  ];
-  return `<div class="chip-row">${chips.map(([label, href, active]) => `<a class="chip${active ? ' active' : ''}" href="${href}">${escapeHtml(label)}</a>`).join('')}</div>`;
-};
-
-export const homePage = (trending, region = 'US') => {
-  const { shorts, videos } = splitVideos(trending || []);
-  return pageShell(`
-    <section class="page-head">
-      <div>
-        <p class="eyebrow">ホーム</p>
-        <h1>おすすめ</h1>
-      </div>
-      <div class="page-head-meta">
-        <span class="pill">${escapeHtml(region)}</span>
-      </div>
-    </section>
-    ${sectionBlock('ショート動画', shorts, 'short-grid')}
-    ${sectionBlock('注目の動画', videos, 'video-grid')}
-    ${!shorts.length && !videos.length ? '<div class="empty">表示できるコンテンツがありません</div>' : ''}
-  `, 'AuroraTube', '', 'home');
-};
-
-export const searchPage = (query, filters, items = []) => {
-  const { shorts, videos } = splitVideos(items);
-  const channels = items.filter((item) => item.type === 'channel');
-  const playlists = items.filter((item) => item.type === 'playlist');
-  return pageShell(`
-    <section class="page-head">
-      <div>
-        <p class="eyebrow">検索結果</p>
-        <h1>${escapeHtml(query || '検索')}</h1>
-      </div>
-      <div class="page-head-meta">
-        <span class="pill">${escapeHtml(String(filters.type || 'all'))}</span>
-        <span class="pill">${escapeHtml(String(filters.sort || 'relevance'))}</span>
-        <span class="pill">${formatCompactNumber(items.length)} 件</span>
-      </div>
-    </section>
-    ${filterChips({ ...filters, query })}
-    ${sectionBlock('ショート動画', shorts, 'short-grid')}
-    ${sectionBlock('動画', videos, 'video-grid')}
-    ${channelSections(channels)}
-    ${playlistSections(playlists)}
-    ${!items.length ? '<div class="empty">結果がありません</div>' : ''}
-  `, `${query || '検索'} - AuroraTube`, query, 'home');
-};
-
-
-export const shortsFeedPage = (items = [], region = 'US') => {
-  const { shorts } = splitVideos(items || []);
-  return pageShell(`
-    <section class="page-head">
-      <div>
-        <p class="eyebrow">ショート</p>
-        <h1>フィード</h1>
-      </div>
-      <div class="page-head-meta">
-        <span class="pill">${escapeHtml(region)}</span>
-      </div>
-    </section>
-    ${sectionBlock('ショート動画', shorts, 'short-grid')}
-    ${!shorts.length ? '<div class="empty">表示できるショート動画がありません</div>' : ''}
-  `, 'ショート - AuroraTube', '', 'shorts');
 };
 
 export const watchPage = (payload = {}) => {
-  const v = payload.video || {};
+  const video = payload.video || {};
   const related = Array.isArray(payload.related) ? payload.related.slice(0, 16) : [];
   const comments = Array.isArray(payload.comments) ? payload.comments : [];
-  const videoId = String(v.videoId || '');
-  const poster = thumbnailUrl(v.thumbnail || '');
-  const playback = v.playback || {};
+  const playback = video.playback || {};
+  const body = `
+    <div class="watch-layout">
+      <section class="watch-main">
+        ${playerMarkup({ videoId: video.videoId || '', poster: thumbnailUrl(video.thumbnail || ''), short: false, playback })}
+        ${watchHeader(video, playback, currentUrl().href)}
+        ${channelInfo(video)}
+        ${descriptionBlock(video.description || '')}
+        ${commentsSection({ comments, commentsContinuation: payload.commentsContinuation, video }, video.videoId || '')}
+      </section>
 
-  return pageShell(`
-    <article class="viewer viewer-watch">
-      ${playerMarkup({ videoId, poster, short: false, playback })}
-
-      <section class="viewer-head">
-        <div class="watch-copy">
-          <p class="eyebrow">視聴</p>
-          <h1 class="watch-title">${escapeHtml(v.title || '')}</h1>
-          <div class="watch-meta-row">
-            <div class="watch-stats">
-              <span>${v.viewCount ? `${formatCompactNumber(v.viewCount)} 回視聴` : '0 回視聴'}</span>
-              <span>${v.publishedText ? escapeHtml(v.publishedText) : ''}</span>
-              ${v.lengthSeconds ? `<span>${formatDuration(v.lengthSeconds)}</span>` : ''}
-            </div>
+      <aside class="watch-rail">
+        <section class="rail-card">
+          <div class="section-head">
+            <h2>関連動画</h2>
           </div>
-        </div>
-        ${playbackNotice(playback)}
-      </section>
-
-      <a class="channel-strip" href="${v.authorId ? buildChannelUrl(v.authorId) : '#'}">
-        <span class="channel-avatar">${avatar(v.authorThumbnails || [])}</span>
-        <span class="channel-info">
-          <strong class="channel-name">${escapeHtml(v.author || '')}</strong>
-          <span class="channel-submeta">${escapeHtml(v.authorId || '')}</span>
-        </span>
-      </a>
-
-      ${v.description ? `<section class="description-card"><div class="description">${textBlock(v.description)}</div></section>` : ''}
-
-      <section class="comments-section">
-        <div class="section-head">
-          <h2>コメント</h2>
-          <span class="count">${formatNumber(v.commentsCount || comments.length)} 件</span>
-        </div>
-        <div class="comments" data-comments>${comments.map((comment) => commentCard(comment)).join('') || '<div class="empty">コメントがありません</div>'}</div>
-        ${payload.commentsContinuation ? `<button class="ghost-btn load-more" type="button" data-load-comments="${escapeHtml(payload.commentsContinuation)}" data-video-id="${escapeHtml(v.videoId || '')}">さらに表示</button>` : ''}
-      </section>
-
-      <aside class="watch-related-column">
-        <section class="section-block">
-          <div class="section-head"><h2>関連動画</h2></div>
-          <div class="related-grid">${related.map((item) => videoCard(item, 'row')).join('') || '<div class="empty">関連動画がありません</div>'}</div>
+          <div class="related-list">
+            ${related.map((item) => videoCard(item, 'row')).join('') || '<div class="empty-state">関連動画がありません</div>'}
+          </div>
         </section>
       </aside>
-    </article>
-  `, `${v.title || 'Watch'} - AuroraTube`, '', 'home');
+    </div>
+  `;
+
+  const title = `${video.title || 'Watch'} - AuroraTube`;
+  return { html: appShell({ title, body, active: '' }), title };
 };
 
 export const shortsPage = (payload = {}) => {
-  const v = payload.video || {};
+  const video = payload.video || {};
   const related = Array.isArray(payload.related) ? payload.related.slice(0, 12) : [];
-  const videoId = String(v.videoId || '');
-  const poster = thumbnailUrl(v.thumbnail || '');
-  const playback = v.playback || {};
+  const playback = video.playback || {};
+  const body = `
+    <div class="watch-layout shorts-layout">
+      <section class="watch-main">
+        ${playerMarkup({ videoId: video.videoId || '', poster: thumbnailUrl(video.thumbnail || ''), short: true, playback })}
+        ${watchHeader(video, playback, currentUrl().href)}
+        ${channelInfo(video)}
+        ${descriptionBlock(video.description || '')}
+      </section>
 
-  return pageShell(`
-    <article class="viewer viewer-short">
-      ${playerMarkup({ videoId, poster, short: true, playback })}
-
-      <section class="viewer-head">
-        <div class="watch-copy">
-          <p class="eyebrow">ショート</p>
-          <h1 class="watch-title">${escapeHtml(v.title || '')}</h1>
-          <div class="watch-meta-row">
-            <div class="watch-stats">
-              <span>${v.viewCount ? `${formatCompactNumber(v.viewCount)} 回視聴` : '0 回視聴'}</span>
-              ${v.lengthSeconds ? `<span>${formatDuration(v.lengthSeconds)}</span>` : ''}
-            </div>
+      <aside class="watch-rail">
+        <section class="rail-card">
+          <div class="section-head">
+            <h2>次のショート</h2>
           </div>
-        </div>
-        ${playbackNotice(playback)}
-      </section>
+          <div class="related-list short-related">
+            ${related.map((item) => videoCard(item, 'short')).join('') || '<div class="empty-state">関連動画がありません</div>'}
+          </div>
+        </section>
+      </aside>
+    </div>
+  `;
 
-      <a class="channel-strip" href="${v.authorId ? buildChannelUrl(v.authorId) : '#'}">
-        <span class="channel-avatar">${avatar(v.authorThumbnails || [])}</span>
-        <span class="channel-info">
-          <strong class="channel-name">${escapeHtml(v.author || '')}</strong>
-          <span class="channel-submeta">${escapeHtml(v.authorId || '')}</span>
-        </span>
-      </a>
-
-      <section class="section-block">
-        <div class="section-head"><h2>関連動画</h2></div>
-        <div class="related-grid">${related.map((item) => videoCard(item, 'short')).join('') || '<div class="empty">関連動画がありません</div>'}</div>
-      </section>
-    </article>
-  `, `${v.title || 'Shorts'} - AuroraTube`, '', 'shorts');
+  const title = `${video.title || 'Shorts'} - AuroraTube`;
+  return { html: appShell({ title, body, active: 'shorts' }), title };
 };
+
+const channelHeader = (header = {}, payload = {}) => `
+  <section class="channel-hero">
+    ${header.banner ? `<div class="channel-banner"><img src="${escapeAttr(thumbnailUrl(header.banner))}" alt="" loading="lazy" referrerpolicy="no-referrer" /></div>` : ''}
+    <div class="channel-profile">
+      <div class="channel-profile-avatar">${avatar(header.avatar ? [{ url: header.avatar }] : [])}</div>
+      <div class="channel-profile-copy">
+        <p class="eyebrow">チャンネル</p>
+        <h1>${escapeHtml(header.name || payload.title || payload.channelId || '')}</h1>
+        <div class="channel-submeta">${escapeHtml(header.id || payload.channelId || '')}${header.subCountText ? ` ・ ${escapeHtml(header.subCountText)}` : ''}${header.verified ? ' ・ Verified' : ''}</div>
+        ${header.description ? `<p class="channel-description">${escapeHtml(header.description)}</p>` : ''}
+      </div>
+    </div>
+    <div class="channel-tabs">
+      <a href="#videos">動画</a>
+      ${payload.playlists?.length ? '<a href="#playlists">再生リスト</a>' : ''}
+      ${payload.relatedChannels?.length ? '<a href="#channels">チャンネル</a>' : ''}
+      ${header.description ? '<a href="#about">概要</a>' : ''}
+    </div>
+  </section>
+`;
 
 export const channelPage = (payload = {}) => {
   const header = payload.header || {};
   const videos = Array.isArray(payload.videos) ? payload.videos : [];
   const playlists = Array.isArray(payload.playlists) ? payload.playlists : [];
   const relatedChannels = Array.isArray(payload.relatedChannels) ? payload.relatedChannels : [];
-  const tabs = [
-    ['動画', true],
-    ['再生リスト', playlists.length > 0],
-    ['チャンネル', relatedChannels.length > 0],
-  ];
+  const body = `
+    <div class="channel-page">
+      ${channelHeader(header, payload)}
 
-  return pageShell(`
-    <section class="channel-page">
-      <div class="channel-hero">
-        ${header.banner ? `<div class="channel-banner"><img src="${escapeHtml(thumbnailUrl(header.banner))}" alt="" loading="lazy" referrerpolicy="no-referrer" /></div>` : ''}
-        <div class="channel-profile">
-          <span class="channel-profile-avatar">${avatar(header.avatar ? [{ url: header.avatar }] : [])}</span>
-          <div class="channel-profile-copy">
-            <p class="eyebrow">チャンネル</p>
-            <h1>${escapeHtml(header.name || payload.channelId || '')}</h1>
-            <div class="channel-profile-meta">
-              <span>${escapeHtml(header.subCountText || '')}</span>
-              <span>${header.videoCount ? `${formatCompactNumber(header.videoCount)} 本` : ''}</span>
-              ${header.verified ? '<span class="pill">認証済み</span>' : ''}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="channel-tabs">${tabs.map(([label, visible]) => visible ? `<span class="chip active">${escapeHtml(label)}</span>` : '').join('')}</div>
-
-      <section class="section-block">
+      <section class="section-block" id="videos">
         <div class="section-head">
           <h2>動画</h2>
-          <span class="count">${formatNumber(videos.length)} 件</span>
+          ${renderLoadMore({ continuation: payload.continuation, id: payload.channelId || '', sortBy: payload.sortBy || 'newest', label: 'さらに表示', type: 'channel' })}
         </div>
-        <div class="video-grid" data-channel-grid>${videos.map((item) => videoCard(item)).join('') || '<div class="empty">動画がありません</div>'}</div>
-        ${payload.continuation ? `<button class="ghost-btn load-more" type="button" data-load-channel="${escapeHtml(payload.continuation)}" data-channel-id="${escapeHtml(payload.channelId || '')}" data-sort-by="${escapeHtml(payload.sortBy || 'newest')}">さらに表示</button>` : ''}
+        <div class="video-grid channel-video-grid" data-channel-grid>
+          ${videos.map((item) => videoCard(item)).join('') || '<div class="empty-state">動画がありません</div>'}
+        </div>
       </section>
 
-      ${playlists.length ? `<section class="section-block"><div class="section-head"><h2>再生リスト</h2></div><div class="card-grid">${playlists.map((item) => playlistCard(item)).join('')}</div></section>` : ''}
-      ${relatedChannels.length ? `<section class="section-block"><div class="section-head"><h2>関連チャンネル</h2></div><div class="card-grid">${relatedChannels.map((item) => channelCard(item)).join('')}</div></section>` : ''}
-    </section>
-  `, `${header.name || payload.channelId || 'Channel'} - AuroraTube`, '', 'home');
+      ${playlists.length ? `
+        <section class="section-block" id="playlists">
+          <div class="section-head"><h2>再生リスト</h2></div>
+          <div class="playlist-grid">${playlists.map((item) => playlistCard(item)).join('')}</div>
+        </section>
+      ` : ''}
+
+      ${relatedChannels.length ? `
+        <section class="section-block" id="channels">
+          <div class="section-head"><h2>関連チャンネル</h2></div>
+          <div class="channel-grid">${relatedChannels.map((item) => channelCard(item)).join('')}</div>
+        </section>
+      ` : ''}
+
+      ${header.description ? `<section class="section-block" id="about"><div class="description-card"><div class="description">${textBlock(header.description)}</div></div></section>` : ''}
+    </div>
+  `;
+
+  const title = `${header.name || payload.title || payload.channelId || 'Channel'} - AuroraTube`;
+  return { html: appShell({ title, body, active: '' }), title };
 };
 
-export const notFoundPage = () => pageShell(`
-  <section class="empty large">
-    <strong>ページが見つかりません</strong>
-  </section>
-`, '404 - AuroraTube', '', 'home');
+export const notFoundPage = () => ({
+  html: appShell({
+    title: '404 - AuroraTube',
+    active: '',
+    body: '<div class="empty-state large">ページが見つかりません。</div>',
+  }),
+  title: '404 - AuroraTube',
+});

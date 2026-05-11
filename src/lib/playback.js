@@ -35,106 +35,102 @@ const isAudioOnly = (format) => Boolean(
     || (format.mime && format.mime.includes('audio') && !format.mime.includes('video')))
 );
 
-const pickBest = (formats, predicate) => [...formats]
-  .filter(predicate)
-  .sort((left, right) => compareScore(toScore(left), toScore(right)))[0] || null;
-
 const buildStreamUrl = (videoId, quality = '') => {
-  const search = new URLSearchParams();
-  if (isNonEmptyString(quality)) search.set('quality', quality);
-  const query = search.toString();
-  return `/api/watch/${encodeURIComponent(videoId)}/stream${query ? `?${query}` : ''}`;
+  const id = encodeURIComponent(String(videoId || ''));
+  const qs = new URLSearchParams();
+  if (isNonEmptyString(quality) && quality !== 'auto') qs.set('quality', quality);
+  const query = qs.toString();
+  return query ? `/api/watch/${id}/stream?${query}` : `/api/watch/${id}/stream`;
 };
 
 const buildDownloadUrl = (videoId, quality = '') => {
-  const search = new URLSearchParams();
-  if (isNonEmptyString(quality)) search.set('quality', quality);
-  const query = search.toString();
-  return `/api/watch/${encodeURIComponent(videoId)}/download${query ? `?${query}` : ''}`;
+  const id = encodeURIComponent(String(videoId || ''));
+  const qs = new URLSearchParams();
+  if (isNonEmptyString(quality) && quality !== 'auto') qs.set('quality', quality);
+  const query = qs.toString();
+  return query ? `/api/watch/${id}/download?${query}` : `/api/watch/${id}/download`;
 };
 
-const variantKey = (format, index) => {
-  const label = String(format.qualityLabel || '').trim();
+const qualityValue = (format) => {
+  const label = String(format?.qualityLabel || '').trim();
   if (label) return label.toLowerCase();
-  const height = Number(format.height || 0);
-  const width = Number(format.width || 0);
-  const fps = Number(format.fps || 0);
-  if (height > 0) return `${height}p${fps > 0 && fps !== 30 ? `-${fps}fps` : ''}`;
-  if (width > 0) return `${width}w${fps > 0 && fps !== 30 ? `-${fps}fps` : ''}`;
-  return `variant-${index + 1}`;
+  if (Number(format?.height || 0) > 0) return `${Number(format.height)}p`;
+  if (Number(format?.width || 0) > 0 && Number(format?.height || 0) > 0) return `${Number(format.width)}x${Number(format.height)}`;
+  return '';
 };
 
-const variantLabel = (format, index) => {
-  const label = String(format.qualityLabel || '').trim();
+const formatQualityLabel = (format) => {
+  const label = String(format?.qualityLabel || '').trim();
   if (label) return label;
-  const height = Number(format.height || 0);
-  const width = Number(format.width || 0);
-  const fps = Number(format.fps || 0);
-  if (height > 0) return `${height}p${fps > 0 && fps !== 30 ? ` ${fps}fps` : ''}`;
-  if (width > 0 && height > 0) return `${width}x${height}`;
-  return `画質 ${index + 1}`;
+  if (Number(format?.height || 0) > 0) return `${Number(format.height)}p`;
+  if (Number(format?.width || 0) > 0 && Number(format?.height || 0) > 0) return `${Number(format.width)}×${Number(format.height)}`;
+  return 'unknown';
 };
 
-const buildMuxedVariants = (formats = [], quality = '') => {
-  const unique = [];
-  const seen = new Set();
+const matchesQuality = (format, quality) => {
+  const requested = String(quality || '').trim().toLowerCase();
+  if (!requested || requested === 'auto' || requested === 'best') return false;
+  const candidates = [
+    qualityValue(format),
+    String(format?.qualityLabel || '').trim().toLowerCase(),
+    String(format?.height || '').trim().toLowerCase(),
+    String(format?.width && format?.height ? `${format.width}x${format.height}` : '').trim().toLowerCase(),
+  ].filter(Boolean);
+  return candidates.includes(requested);
+};
 
-  for (const [index, format] of [...formats].sort((left, right) => compareScore(toScore(left), toScore(right))).entries()) {
-    const key = variantKey(format, index);
-    if (!format?.url || seen.has(key) || seen.has(format.url)) continue;
-    seen.add(key);
-    seen.add(format.url);
-    unique.push({
-      key,
-      label: variantLabel(format, index),
-      url: format.url,
-      width: Number(format.width || 0),
-      height: Number(format.height || 0),
-      fps: Number(format.fps || 0),
-      selected: false,
+const pickBest = (formats, predicate, quality = '') => {
+  const candidates = [...formats].filter(predicate);
+  if (!candidates.length) return null;
+  if (isNonEmptyString(quality) && quality !== 'auto' && quality !== 'best') {
+    const exact = candidates.find((format) => matchesQuality(format, quality));
+    if (exact) return exact;
+  }
+  return candidates.sort((left, right) => compareScore(toScore(left), toScore(right)))[0] || null;
+};
+
+const buildQualityOptions = (formats) => {
+  const options = [{ value: 'auto', label: '自動' }];
+  const seen = new Set(['auto']);
+  for (const format of [...formats].sort((left, right) => compareScore(toScore(left), toScore(right)))) {
+    const value = qualityValue(format);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    options.push({
+      value,
+      label: formatQualityLabel(format),
+      height: Number(format?.height || 0),
+      width: Number(format?.width || 0),
+      fps: Number(format?.fps || 0),
     });
   }
-
-  if (!unique.length) return [];
-
-  const requested = isNonEmptyString(quality)
-    ? unique.find((variant) => variant.key === quality.toLowerCase() || variant.label.toLowerCase() === quality.toLowerCase())
-    : null;
-  const selected = requested || unique[0];
-  const autoSelected = !requested || quality === 'auto' || !isNonEmptyString(quality);
-
-  return [
-    { key: 'auto', label: '自動', url: selected.url, width: selected.width, height: selected.height, fps: selected.fps, selected: autoSelected },
-    ...unique.map((variant) => ({ ...variant, selected: !autoSelected && variant.key === selected.key })),
-  ];
+  return options;
 };
 
-const buildWarning = (url) => (isNonEmptyString(url)
-  ? 'HLS は直接参照です。'
-  : '');
-
-export const selectPlaybackPlan = (video = {}, { videoId = '', quality = '', allowHls = true } = {}) => {
+export const selectPlaybackPlan = (video = {}, { videoId = '', allowHls = true, quality = '' } = {}) => {
   const formats = collectFormats(video);
-  const muxed = pickBest(formats, isMuxed);
-  const muxedVariants = buildMuxedVariants(formats.filter(isMuxed), quality);
+  const qualityOptions = buildQualityOptions(formats.filter((format) => isMuxed(format) || isVideoOnly(format)));
+  const normalizedQuality = String(quality || '').trim().toLowerCase();
+  const requestedQuality = normalizedQuality && normalizedQuality !== 'best' ? normalizedQuality : 'auto';
+  const hasExactQuality = requestedQuality !== 'auto' && formats.some((format) => (isMuxed(format) || isVideoOnly(format)) && matchesQuality(format, requestedQuality));
+  const selectedQuality = hasExactQuality ? requestedQuality : 'auto';
 
+  const muxed = pickBest(formats, isMuxed, selectedQuality);
   if (muxed?.url) {
-    const selected = muxedVariants.find((variant) => variant.selected) || muxedVariants[0] || null;
-    const directUrl = selected?.url || muxed.url;
     return {
       kind: 'muxed',
-      sourceUrl: directUrl,
-      playUrl: directUrl,
-      downloadUrl: directUrl,
-      proxy: false,
+      sourceUrl: muxed.url,
+      playUrl: buildStreamUrl(videoId, selectedQuality),
+      downloadUrl: buildDownloadUrl(videoId, selectedQuality),
+      proxy: true,
       warning: '',
       source: 'muxed-format',
-      variants: muxedVariants,
-      selectedQuality: selected?.key || 'auto',
+      selectedQuality,
+      qualities: qualityOptions,
     };
   }
 
-  const videoOnly = pickBest(formats, isVideoOnly);
+  const videoOnly = pickBest(formats, isVideoOnly, selectedQuality);
   const audioOnly = pickBest(formats, isAudioOnly);
   if (videoOnly?.url && audioOnly?.url) {
     return {
@@ -142,13 +138,13 @@ export const selectPlaybackPlan = (video = {}, { videoId = '', quality = '', all
       sourceUrl: videoOnly.url,
       videoUrl: videoOnly.url,
       audioUrl: audioOnly.url,
-      playUrl: buildStreamUrl(videoId, quality),
-      downloadUrl: buildDownloadUrl(videoId, quality),
+      playUrl: buildStreamUrl(videoId, selectedQuality),
+      downloadUrl: buildDownloadUrl(videoId, selectedQuality),
       proxy: true,
       warning: '',
       source: 'adaptive-formats',
-      variants: [],
-      selectedQuality: quality || 'auto',
+      selectedQuality,
+      qualities: qualityOptions,
     };
   }
 
@@ -156,13 +152,13 @@ export const selectPlaybackPlan = (video = {}, { videoId = '', quality = '', all
     return {
       kind: 'hls',
       sourceUrl: video.hlsUrl,
-      playUrl: video.hlsUrl,
-      downloadUrl: video.hlsUrl,
-      proxy: false,
-      warning: buildWarning(video.hlsUrl),
+      playUrl: buildStreamUrl(videoId, selectedQuality),
+      downloadUrl: buildDownloadUrl(videoId, selectedQuality),
+      proxy: true,
+      warning: '',
       source: 'hls-url',
-      variants: [],
       selectedQuality: 'auto',
+      qualities: [{ value: 'auto', label: '自動' }],
     };
   }
 
@@ -170,13 +166,13 @@ export const selectPlaybackPlan = (video = {}, { videoId = '', quality = '', all
     return {
       kind: 'dash-manifest',
       sourceUrl: video.dashUrl,
-      playUrl: buildStreamUrl(videoId, quality),
-      downloadUrl: buildDownloadUrl(videoId, quality),
+      playUrl: buildStreamUrl(videoId, selectedQuality),
+      downloadUrl: buildDownloadUrl(videoId, selectedQuality),
       proxy: true,
       warning: '',
       source: 'dash-url',
-      variants: [],
-      selectedQuality: quality || 'auto',
+      selectedQuality: 'auto',
+      qualities: [{ value: 'auto', label: '自動' }],
     };
   }
 

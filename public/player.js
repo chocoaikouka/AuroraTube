@@ -1,5 +1,9 @@
+import { escapeAttr, escapeHtml } from './lib/format.js';
+import { currentUrl, navigate } from './lib/router.js';
+import { watchUrl } from './lib/routes.js';
 
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3];
+const RESUME_PREFIX = 'auroratube:resume:';
 
 const formatTime = (seconds) => {
   const total = Math.max(0, Number(seconds || 0));
@@ -9,25 +13,50 @@ const formatTime = (seconds) => {
   return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `${minutes}:${String(secs).padStart(2, '0')}`;
 };
 
-const escapeAttr = (value) => String(value ?? '')
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
+const resumeKey = (videoId) => `${RESUME_PREFIX}${videoId}`;
 
-const sanitizeVariantKey = (variant = {}) => String(variant.key || variant.label || variant.url || '').trim();
+const readResumePoint = (videoId) => {
+  try {
+    const raw = sessionStorage.getItem(resumeKey(videoId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Number.isFinite(Number(parsed?.time)) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
 
-const renderQualityOptions = (variants = []) => {
-  const list = Array.isArray(variants) ? variants : [];
-  if (list.length <= 1) return '';
+const writeResumePoint = (videoId, time, quality) => {
+  try {
+    sessionStorage.setItem(resumeKey(videoId), JSON.stringify({
+      time: Number(time || 0),
+      quality: String(quality || 'auto'),
+      at: Date.now(),
+    }));
+  } catch {
+    // storage is best-effort only
+  }
+};
+
+const clearResumePoint = (videoId) => {
+  try {
+    sessionStorage.removeItem(resumeKey(videoId));
+  } catch {
+    // ignore storage failures
+  }
+};
+
+const qualityOptionsMarkup = (qualities = [], selectedQuality = 'auto') => {
+  if (!Array.isArray(qualities) || qualities.length <= 1) return '';
   return `
-    <label class="player-speed-label player-quality-label">
+    <label class="player-label player-quality-label">
       <span>画質</span>
       <select class="player-select" data-player-quality aria-label="画質">
-        ${list.map((variant) => `
-          <option value="${escapeAttr(sanitizeVariantKey(variant))}" data-url="${escapeAttr(variant.url || '')}"${variant.selected ? ' selected' : ''}>${escapeAttr(variant.label || '自動')}</option>
-        `).join('')}
+        ${qualities.map((option) => {
+          const value = String(option?.value || 'auto');
+          const label = String(option?.label || value);
+          return `<option value="${escapeAttr(value)}"${value === selectedQuality ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+        }).join('')}
       </select>
     </label>
   `;
@@ -39,25 +68,18 @@ export const playerMarkup = ({
   short = false,
   playback = {},
 } = {}) => {
-  const safeVideoId = String(videoId || '').trim();
-  const selectedUrl = String(playback.playUrl || playback.streamUrl || '').trim();
-  const downloadUrl = String(playback.downloadUrl || selectedUrl || '').trim();
-  const variants = Array.isArray(playback.variants) ? playback.variants : [];
-  const qualityKey = String(playback.selectedQuality || (variants.find((variant) => variant.selected)?.key || 'auto')).trim() || 'auto';
-  const proxy = Boolean(playback.proxy);
-  const warning = String(playback.warning || '');
-  const proxyLabel = proxy ? 'PROXY' : 'DIRECT';
+  const selectedQuality = String(playback.selectedQuality || 'auto');
+  const safeVideoId = escapeAttr(videoId);
+  const playbackUrl = playback.playUrl || playback.streamUrl || (safeVideoId ? watchUrl(videoId, selectedQuality !== 'auto' ? { quality: selectedQuality } : {}) : '');
+  const downloadUrl = playback.downloadUrl || (safeVideoId ? `/api/watch/${encodeURIComponent(videoId)}/download${selectedQuality !== 'auto' ? `?quality=${encodeURIComponent(selectedQuality)}` : ''}` : playbackUrl);
+  const qualities = Array.isArray(playback.qualities) ? playback.qualities : [];
 
   return `
-    <section class="player-frame player-shell ${short ? 'player-frame-short player-shell-short' : ''}" data-player data-video-id="${escapeAttr(safeVideoId)}" data-playback-url="${escapeAttr(selectedUrl)}" data-download-url="${escapeAttr(downloadUrl)}" data-quality="${escapeAttr(qualityKey)}">
+    <section class="player-shell ${short ? 'player-shell-short' : ''}" data-player data-video-id="${safeVideoId}" data-selected-quality="${escapeAttr(selectedQuality)}" data-playback-url="${escapeAttr(playbackUrl)}">
       <div class="player-stage">
-        <video class="player-video" playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ''} src="${escapeAttr(selectedUrl)}"></video>
+        <video class="player-video" playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ''} src="${escapeAttr(playbackUrl)}"></video>
         <div class="player-overlay"></div>
         <button class="player-center" type="button" data-player-play aria-label="再生/一時停止">▶</button>
-        <div class="player-badges">
-          <span class="player-badge ${proxy ? 'player-badge-proxy' : 'player-badge-direct'}">${proxyLabel}</span>
-          ${warning ? `<span class="player-badge player-badge-warning">${escapeAttr(warning)}</span>` : ''}
-        </div>
       </div>
 
       <div class="player-controls">
@@ -72,32 +94,19 @@ export const playerMarkup = ({
         <div class="player-row player-row-secondary">
           <button class="player-icon-button" type="button" data-player-mute aria-label="ミュート">音量</button>
           <input class="player-volume" type="range" min="0" max="1" value="1" step="0.05" data-player-volume aria-label="音量" />
-          ${renderQualityOptions(variants)}
-          <label class="player-speed-label">
+          ${qualityOptionsMarkup(qualities, selectedQuality)}
+          <label class="player-label player-speed-label">
             <span>速度</span>
             <select class="player-select" data-player-speed aria-label="再生速度">
               ${SPEEDS.map((speed) => `<option value="${speed}"${speed === 1 ? ' selected' : ''}>${speed}x</option>`).join('')}
             </select>
           </label>
-          <a class="player-icon-button" data-player-download href="${escapeAttr(downloadUrl)}" download>DL</a>
+          <a class="player-icon-button" data-player-download href="${escapeAttr(downloadUrl)}">DL</a>
           <button class="player-icon-button" type="button" data-player-fullscreen aria-label="全画面">全画面</button>
         </div>
       </div>
     </section>
   `;
-};
-
-const updateWatchQuery = (videoId, quality) => {
-  if (!videoId) return;
-  const url = new URL(window.location.href);
-  const isShorts = url.pathname.startsWith('/shorts/');
-  url.pathname = isShorts ? url.pathname : '/watch';
-  if (!isShorts) {
-    url.searchParams.set('v', videoId);
-  }
-  if (quality && quality !== 'auto') url.searchParams.set('quality', quality);
-  else url.searchParams.delete('quality');
-  history.replaceState({}, '', `${url.pathname}${url.search}`);
 };
 
 const syncState = (root) => {
@@ -112,13 +121,11 @@ const syncState = (root) => {
   const quality = root.querySelector('[data-player-quality]');
   const download = root.querySelector('[data-player-download]');
   const fullscreen = root.querySelector('[data-player-fullscreen]');
-  const videoId = root.dataset.videoId || '';
+  const videoId = String(root.dataset.videoId || '');
+  const selectedQuality = String(root.dataset.selectedQuality || 'auto');
 
   if (!video || root.dataset.playerMounted === 'true') return;
   root.dataset.playerMounted = 'true';
-
-  let pendingSeek = null;
-  let desiredPlay = false;
 
   const updateTime = () => {
     const current = formatTime(video.currentTime || 0);
@@ -136,7 +143,6 @@ const syncState = (root) => {
       playCenter.textContent = playing ? '❚❚' : '▶';
       playCenter.hidden = playing;
     }
-    desiredPlay = playing;
   };
 
   const updateMuteState = () => {
@@ -149,47 +155,17 @@ const syncState = (root) => {
     updateMuteState();
   };
 
-  const updateQualityState = (value) => {
-    if (!quality) return;
-    quality.value = value;
-    root.dataset.quality = value;
-    updateWatchQuery(videoId, value);
-  };
-
-  const changeSource = async (url, selectedQuality = 'auto') => {
-    updateQualityState(selectedQuality);
-    if (download) download.href = url || download.getAttribute('href') || '#';
-
-    if (!url || video.src === url) {
-      return;
+  const restoreResumePoint = () => {
+    if (!videoId) return;
+    const saved = readResumePoint(videoId);
+    if (!saved) return;
+    const savedQuality = String(saved.quality || 'auto');
+    if (savedQuality !== selectedQuality && savedQuality !== 'auto') return;
+    const target = Number(saved.time || 0);
+    if (Number.isFinite(target) && target > 0 && Number.isFinite(video.duration)) {
+      video.currentTime = Math.min(Math.max(0, target), Math.max(0, video.duration - 1));
     }
-
-    pendingSeek = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-    desiredPlay = !video.paused && !video.ended;
-    video.pause();
-    video.src = url;
-    video.load();
-
-    const restore = async () => {
-      if (pendingSeek !== null && Number.isFinite(pendingSeek)) {
-        try {
-          video.currentTime = pendingSeek;
-        } catch {
-          // ignore seek restoration failures
-        }
-      }
-      pendingSeek = null;
-      if (desiredPlay) {
-        try {
-          await video.play();
-        } catch {
-          // autoplay/network failures are acceptable here
-        }
-      }
-      video.removeEventListener('loadedmetadata', restore);
-    };
-
-    video.addEventListener('loadedmetadata', restore);
+    clearResumePoint(videoId);
   };
 
   const togglePlay = async () => {
@@ -200,8 +176,20 @@ const syncState = (root) => {
         video.pause();
       }
     } catch {
-      // ignore playback errors caused by autoplay policy or network issues
+      // ignore autoplay/network errors
     }
+  };
+
+  const navigateQuality = (nextQuality) => {
+    if (!videoId) return;
+    const url = currentUrl();
+    if (nextQuality && nextQuality !== 'auto') {
+      url.searchParams.set('quality', nextQuality);
+    } else {
+      url.searchParams.delete('quality');
+    }
+    writeResumePoint(videoId, video.currentTime || 0, nextQuality || 'auto');
+    navigate(`${url.pathname}${url.search}${url.hash}`, { replace: true });
   };
 
   playToggle?.addEventListener('click', togglePlay);
@@ -236,10 +224,7 @@ const syncState = (root) => {
   });
 
   quality?.addEventListener('change', () => {
-    const option = quality.selectedOptions?.[0];
-    const selectedQuality = String(quality.value || 'auto').trim() || 'auto';
-    const nextUrl = option?.dataset?.url || '';
-    changeSource(nextUrl, selectedQuality);
+    navigateQuality(String(quality.value || 'auto'));
   });
 
   download?.addEventListener('click', (event) => {
@@ -260,7 +245,10 @@ const syncState = (root) => {
     }
   });
 
-  video.addEventListener('loadedmetadata', updateTime);
+  video.addEventListener('loadedmetadata', () => {
+    updateTime();
+    restoreResumePoint();
+  });
   video.addEventListener('timeupdate', updateTime);
   video.addEventListener('durationchange', updateTime);
   video.addEventListener('play', updatePlayState);
@@ -275,9 +263,11 @@ const syncState = (root) => {
   updatePlayState();
   updateVolumeState();
   if (speed) speed.value = String(video.playbackRate || 1);
-  if (quality) updateQualityState(quality.value || 'auto');
+  if (quality) quality.value = selectedQuality;
 };
 
-export const bindPlayers = () => {
+export const mountPlayers = () => {
   document.querySelectorAll('[data-player]').forEach((root) => syncState(root));
 };
+
+export const bindPlayers = mountPlayers;
