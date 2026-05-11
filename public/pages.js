@@ -2,7 +2,8 @@ import { escapeAttr, escapeHtml, formatCompactNumber, formatDuration, formatNumb
 import { avatar, channelCard, commentCard, isShortVideo, playlistCard, videoCard } from './lib/cards.js';
 import { thumbnailUrl } from './lib/images.js';
 import { appShell } from './lib/shell.js';
-import { channelUrl, currentUrl, searchUrl } from './lib/routes.js';
+import { channelUrl, searchUrl } from './lib/routes.js';
+import { currentUrl } from './lib/router.js';
 import { playerMarkup } from './player.js';
 
 const splitVideos = (items = []) => {
