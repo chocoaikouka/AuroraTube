@@ -3,6 +3,8 @@ import path from 'node:path';
 import { apiRouter } from './routes/api.js';
 import { settings } from './settings.js';
 
+const SPA_ROUTES = ['/', '/results', '/trending', '/search', '/watch/:slug', '/shorts/:slug', '/channel/:slug'];
+
 export const createApp = () => {
   const app = express();
 
@@ -14,7 +16,7 @@ export const createApp = () => {
   app.use('/api', apiRouter);
   app.use(express.static(settings.publicDir, { extensions: ['html'], index: false, maxAge: '1h' }));
 
-  app.get(['/', '/trending', '/search', '/watch/:slug', '/shorts/:slug', '/channel/:slug'], (_req, res) => {
+  app.get(SPA_ROUTES, (_req, res) => {
     res.sendFile(path.join(settings.publicDir, 'index.html'));
   });
 

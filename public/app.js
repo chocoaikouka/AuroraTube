@@ -1,6 +1,6 @@
 import { api } from './lib/api.js';
 import { escapeHtml } from './lib/format.js';
-import { loadingController, assertLoadingUiConsistency } from './lib/ui.js';
+import { loadingController } from './lib/loading.js';
 import { navigate, onInternalLink, currentUrl } from './lib/router.js';
 import { resolveRoute, searchUrl } from './lib/routes.js';
 import { homePage, resultsPage, watchPage, shortsPage, channelPage, notFoundPage } from './pages.js';
@@ -17,6 +17,17 @@ const state = {
   searchAbort: null,
   searchTimer: 0,
   route: null,
+};
+
+const routeLoadingLabel = (route) => {
+  switch (route?.kind) {
+    case 'home': return 'ホームを読み込み中…';
+    case 'results': return '検索結果を読み込み中…';
+    case 'watch': return '動画を読み込み中…';
+    case 'shorts': return 'ショートを読み込み中…';
+    case 'channel': return 'チャンネルを読み込み中…';
+    default: return '読み込み中…';
+  }
 };
 
 const bindSearchForm = () => {
@@ -68,9 +79,11 @@ const bindSearchForm = () => {
   });
 };
 
-const setBusyButton = (button, label, disabled) => {
-  button.disabled = disabled;
-  button.textContent = label;
+const setLoadMoreButtonBusy = (button, busy) => {
+  if (!button) return;
+  button.disabled = busy;
+  button.setAttribute('aria-busy', busy ? 'true' : 'false');
+  button.dataset.busy = busy ? 'true' : 'false';
 };
 
 const appendComments = async (button, signal) => {
@@ -79,7 +92,7 @@ const appendComments = async (button, signal) => {
   if (!videoId || !continuation) return;
 
   const token = loadingController.begin('コメントを読み込み中…');
-  setBusyButton(button, '読み込み中…', true);
+  setLoadMoreButtonBusy(button, true);
 
   try {
     const payload = await api.watchComments(videoId, continuation, signal);
@@ -89,7 +102,8 @@ const appendComments = async (button, signal) => {
     }
     button.remove();
   } catch (error) {
-    setBusyButton(button, error?.message || '失敗しました', false);
+    setLoadMoreButtonBusy(button, false);
+    button.title = error?.message || '読み込みに失敗しました';
   } finally {
     loadingController.end(token);
   }
@@ -102,7 +116,7 @@ const appendChannelVideos = async (button, signal) => {
   if (!channelId || !continuation) return;
 
   const token = loadingController.begin('動画を読み込み中…');
-  setBusyButton(button, '読み込み中…', true);
+  setLoadMoreButtonBusy(button, true);
 
   try {
     const payload = await api.channel(channelId, { continuation, sortBy }, signal);
@@ -112,7 +126,8 @@ const appendChannelVideos = async (button, signal) => {
     }
     button.remove();
   } catch (error) {
-    setBusyButton(button, error?.message || '失敗しました', false);
+    setLoadMoreButtonBusy(button, false);
+    button.title = error?.message || '読み込みに失敗しました';
   } finally {
     loadingController.end(token);
   }
@@ -191,6 +206,19 @@ const bindGlobalEvents = () => {
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       document.body.classList.remove('sidebar-open');
+      document.getElementById('search-suggestions')?.setAttribute('hidden', '');
+      return;
+    }
+
+    const isTypingTarget = /^(INPUT|TEXTAREA|SELECT)$/.test(String(event.target?.tagName || '')) || event.target?.isContentEditable;
+    if (isTypingTarget) return;
+
+    if (event.key === '/' || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k')) {
+      const input = document.getElementById('search-input');
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+      input.select();
     }
   });
 };
@@ -201,7 +229,7 @@ const render = async () => {
   state.renderAbort = new AbortController();
   const signal = state.renderAbort.signal;
   const route = resolveRoute(currentUrl());
-  const loadingToken = loadingController.begin(route.kind === 'home' ? 'ホームを読み込み中…' : route.kind === 'results' ? '検索結果を読み込み中…' : route.kind === 'watch' ? '動画を読み込み中…' : route.kind === 'shorts' ? 'ショートを読み込み中…' : route.kind === 'channel' ? 'チャンネルを読み込み中…' : '読み込み中…');
+  const loadingToken = loadingController.begin(routeLoadingLabel(route));
   const prev = state.route;
   state.route = route;
 
@@ -258,9 +286,10 @@ const render = async () => {
     if (sequence === state.renderSeq) {
       bindSearchForm();
       mountPlayers();
-      assertLoadingUiConsistency();
+      loadingController.end(loadingToken);
+    } else {
+      loadingController.end(loadingToken);
     }
-    loadingController.end(loadingToken);
   }
 };
 
