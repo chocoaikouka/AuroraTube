@@ -1,4 +1,4 @@
-import express from 'express';
+import express from '../lib/miniExpress.js';
 import { badRequest, HttpError } from '../lib/httpError.js';
 import { fetchChannelPage } from '../services/channelService.js';
 import { fetchSearchPage, fetchSearchSuggestions, fetchTrendingPage } from '../services/searchService.js';
